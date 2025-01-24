@@ -1,0 +1,143 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openca-ocspd
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: crl-update-script
+  namespace: openca-ocspd
+data:
+  VAULT_CRL_URL: "https://vault1.demo.cloudnativeapps.cloud:8200/v1/pki-int-ext-ocsp/crl"
+  update-crl.sh: |
+    echo "$(date): Updating CRL"
+    curl -s -k -o /usr/local/ocspd/etc/ocspd/crls/crl.crl ${VAULT_CRL_URL}
+    exit_code=$?
+    if [ $exit_code -eq 0 ]; then
+      echo "$(date): CRL update successful (exit code: $exit_code)"
+    fi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openca-ocspd
+  namespace: openca-ocspd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openca-ocspd
+  template:
+    metadata:
+      labels:
+        app: openca-ocspd
+    spec:
+      initContainers:
+      - name: init-crl-download
+        image: curlimages/curl:latest
+        command: ["/bin/sh"]
+        args: ["/scripts/update-crl.sh"]
+        env:
+        - name: VAULT_CRL_URL
+          valueFrom:
+            configMapKeyRef:
+              name: crl-update-script
+              key: VAULT_CRL_URL
+        volumeMounts:
+        - name: crl-volume
+          mountPath: /usr/local/ocspd/etc/ocspd/crls
+        - name: script-volume
+          mountPath: /scripts
+      containers:
+      - name: openca-ocspd
+        image: harbor.demo.cloudnativeapps.cloud/openca-ocspd/openca-ocspd:3.1.3-b2
+        ports:
+        - name: http
+          containerPort: 2560
+        volumeMounts:
+        - name: ocsp-certs-volume
+          readOnly: true
+          mountPath: /usr/local/ocspd/etc/ocspd/certs
+        - name: crl-volume
+          mountPath: /usr/local/ocspd/etc/ocspd/crls
+          readOnly: true
+        - name: ocsp-key-volume
+          readOnly: true
+          mountPath: /usr/local/ocspd/etc/ocspd/private
+      - name: crl-updater
+        image: curlimages/curl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          while true; do
+            /bin/sh /scripts/update-crl.sh
+            sleep 2
+          done
+        env:
+        - name: VAULT_CRL_URL
+          valueFrom:
+            configMapKeyRef:
+              name: crl-update-script
+              key: VAULT_CRL_URL
+        volumeMounts:
+        - name: crl-volume
+          mountPath: /usr/local/ocspd/etc/ocspd/crls
+        - name: script-volume
+          mountPath: /scripts
+      volumes:
+      - name: ocsp-certs-volume
+        secret:
+          secretName: ocsp-certs
+          items:
+          - key: tls.crt
+            path: tls.crt
+          - key: ca.crt
+            path: ca.crt
+      - name: ocsp-key-volume
+        secret:
+          secretName: ocsp-certs
+          items:
+          - key: tls.key
+            path: tls.key
+      - name: crl-volume
+        emptyDir: {}
+      - name: script-volume
+        configMap:
+          name: crl-update-script
+          defaultMode: 0755
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: openca-ocspd
+  namespace: openca-ocspd
+  labels:
+    app: openca-ocspd
+spec:
+  selector:
+    app: openca-ocspd
+  ports:
+  - name: http
+    port: 2560
+    targetPort: 2560
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openca-ocspd
+  namespace: openca-ocspd
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: ocspd.demo.cloudnativeapps.cloud
+    http:
+      paths:
+      - backend:
+          service:
+            name: openca-ocspd
+            port:
+              number: 2560
+        path: /
+        pathType: Prefix
