@@ -55,9 +55,14 @@ Create a secret containing the CA certificate and the OCSP Daemon certificate an
 
 ```bash
 kubectl create secret generic ocsp-certs -n openca-ocspd \
-    --from-literal=ca.crt=<ca-certificate> \
-    --from-literal=tls.crt=<ocspd-certificate> \
-    --from-literal=tls.key=<ocspd-key>
+    --from-file=ca.crt=ca.crt \
+    --from-file=tls.crt=ocspd.crt \
+    --from-file=tls.key=ocspd.key
+
+kubectl create secret generic ocsp-certs -n openca-ocspd \
+    --from-file=ca.crt=ca.crt \
+    --from-file=tls.crt=ocspd.crt \
+    --from-file=tls.key=ocspd.key
 ```
 
 In the `deploy/deployment.yaml` file, replace the `VAULT_CRL_URL` and the ingress hostname with the appropriate values.
